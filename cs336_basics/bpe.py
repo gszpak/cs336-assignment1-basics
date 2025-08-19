@@ -7,8 +7,6 @@ import os
 import regex as re
 from sortedcontainers import SortedDict, SortedSet
 
-from cs336_basics.pretokenization_example import find_chunk_boundaries
-
 
 EOS = "<|endoftext|>"
 PRE_TOKENIZATION_REGEX = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
