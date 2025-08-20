@@ -18,6 +18,7 @@ class MergeCache:
     def __init__(self):
         self.token_pair_counts = Counter()
         self.count_to_pairs = SortedDict()
+        self.token_to_pre_tokens = defaultdict(set)
         self.pre_tokens = Counter()
 
     def add_pair(self, tok1: bytes, tok2: bytes, count: int):
@@ -50,10 +51,11 @@ class MergeCache:
 
     def merge(self, tok1: bytes, tok2: bytes, count: int):
         pair = (tok1, tok2)
-
         new_token = tok1 + tok2
-        new_pre_tokens = Counter()
-        for pre_token, pre_token_count in self.pre_tokens.items():
+        pre_tokens_to_visit = self.token_to_pre_tokens[tok1] & self.token_to_pre_tokens[tok2]
+        for pre_token in pre_tokens_to_visit:
+            pre_token_count = self.pre_tokens[pre_token]
+            assert pre_token_count > 0
             did_merge = False
             merged_indexes = set()
             for pre_token_idx, (pre_token_tok_1, pre_token_tok_2) in enumerate(pairwise(pre_token)):
@@ -77,15 +79,21 @@ class MergeCache:
                 did_merge = True
             if did_merge:
                 merged_indexes.add(pre_token_idx + 1)
+            if not merged_indexes:
+                continue
             new_pre_token = []
             for tok_idx, tok in enumerate(pre_token):
+                self.token_to_pre_tokens[tok].discard(pre_token)
                 if tok_idx in merged_indexes:
                     new_pre_token.pop()
                     new_pre_token.append(new_token)
                 else:
                     new_pre_token.append(tok)
-            new_pre_tokens[tuple(new_pre_token)] = pre_token_count
-        self.pre_tokens = new_pre_tokens
+            new_pre_token = tuple(new_pre_token)
+            for tok in new_pre_token:
+                self.token_to_pre_tokens[tok].add(new_pre_token)
+            self.pre_tokens[new_pre_token] = pre_token_count
+            del self.pre_tokens[pre_token]
         remaining = self.token_pair_counts.pop(pair)
         pairs_for_count = self.count_to_pairs[remaining]
         pairs_for_count.remove(pair)
@@ -156,6 +164,9 @@ def train_bpe(
         for pre_token, pre_token_count in merge_cache.pre_tokens.items():
             for tok1, tok2 in pairwise(pre_token):
                 merge_cache.add_pair(tok1, tok2, pre_token_count)
+                merge_cache.token_to_pre_tokens[tok1].add(pre_token)
+            if len(pre_token) > 1:
+                merge_cache.token_to_pre_tokens[tok2].add(pre_token)
 
     while len(vocab) < vocab_size:
         pair_to_merge = merge_cache.get_pair_to_merge()
