@@ -46,7 +46,6 @@ class MergeCache:
         if not self.count_to_pairs:
             return None
         count, pairs = self.count_to_pairs.peekitem()
-        logger.info(f"Pairs: {pairs}")
         pair = pairs.pop()
         pairs.add(pair)
         return pair, count
