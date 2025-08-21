@@ -186,7 +186,8 @@ def _pre_tokenize(text: str, special_tokens: list[str]) -> Iterable[tuple[bytes,
         for pre_token_match in re.finditer(PRE_TOKENIZATION_REGEX, text):
             pre_token = pre_token_match.group()
             yield tuple(bytes([ch]) for ch in pre_token.encode())
-    split_pattern = "|".join(re.escape(t) for t in special_tokens)
+    escaped_specials = sorted((re.escape(t) for t in special_tokens), key=len, reverse=True)
+    split_pattern = "|".join(escaped_specials)
     documents = re.split(split_pattern, text)
     for doc in documents:
         if doc in special_tokens:
