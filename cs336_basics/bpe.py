@@ -3,6 +3,7 @@ from itertools import pairwise
 import logging
 from multiprocessing import Pool
 import os
+from typing import Iterable
 
 import regex as re
 from sortedcontainers import SortedDict, SortedSet
@@ -45,6 +46,7 @@ class MergeCache:
         if not self.count_to_pairs:
             return None
         count, pairs = self.count_to_pairs.peekitem()
+        logger.info(f"Pairs: {pairs}")
         pair = pairs.pop()
         pairs.add(pair)
         return pair, count
@@ -149,28 +151,25 @@ def train_bpe(
     """
     with open(input_path, "rb") as f:
         content = f.read().decode("utf-8", errors="ignore")
-    split_pattern = re.escape("|".join(special_tokens))
-    documents = re.split(split_pattern, content)
-    merges: list[tuple[bytes, bytes]] = []
-    vocab = _init_vocab(special_tokens)
-
+    logger.info("Content read")
     merge_cache = MergeCache()
 
-    for doc in documents:
-        for pre_token_match in re.finditer(PRE_TOKENIZATION_REGEX, doc):
-            pre_token = pre_token_match.group()
-            pre_token_tuple = tuple(s.encode("utf-8") for s in pre_token)
-            merge_cache.add_pre_token(pre_token_tuple)
-        for pre_token, pre_token_count in merge_cache.pre_tokens.items():
-            for tok1, tok2 in pairwise(pre_token):
-                merge_cache.add_pair(tok1, tok2, pre_token_count)
-                merge_cache.token_to_pre_tokens[tok1].add(pre_token)
-            if len(pre_token) > 1:
-                merge_cache.token_to_pre_tokens[tok2].add(pre_token)
+    for pre_token in _pre_tokenize(content, special_tokens):
+        merge_cache.add_pre_token(pre_token)
+    logger.info("Pre-tokenization finished")
+    for pre_token, pre_token_count in merge_cache.pre_tokens.items():
+        for tok1, tok2 in pairwise(pre_token):
+            merge_cache.add_pair(tok1, tok2, pre_token_count)
+            merge_cache.token_to_pre_tokens[tok1].add(pre_token)
+        if len(pre_token) > 1:
+            merge_cache.token_to_pre_tokens[tok2].add(pre_token)
+    logger.info("Merge cache initialized")
 
+    merges: list[tuple[bytes, bytes]] = []
+    vocab = _init_vocab(special_tokens)
     while len(vocab) < vocab_size:
         pair_to_merge = merge_cache.get_pair_to_merge()
-        logger.info("pair_to_merge=%s", pair_to_merge)
+        logger.info("Pair to merge: %s", pair_to_merge)
         if pair_to_merge is None:
             break
         pair, count = pair_to_merge
@@ -180,6 +179,21 @@ def train_bpe(
         vocab[len(vocab)] = new_tok
         merges.append(pair)
     return vocab, merges
+
+
+def _pre_tokenize(text: str, special_tokens: list[str]) -> Iterable[tuple[bytes, ...]]:
+    if len(special_tokens) == 0:
+        for pre_token_match in re.finditer(PRE_TOKENIZATION_REGEX, text):
+            pre_token = pre_token_match.group()
+            yield tuple(bytes([ch]) for ch in pre_token.encode())
+    split_pattern = "|".join(re.escape(t) for t in special_tokens)
+    documents = re.split(split_pattern, text)
+    for doc in documents:
+        if doc in special_tokens:
+            yield tuple(bytes([ch]) for ch in doc.encode())
+        for pre_token_match in re.finditer(PRE_TOKENIZATION_REGEX, doc):
+            pre_token = pre_token_match.group()
+            yield tuple(bytes([ch]) for ch in pre_token.encode())
 
 
 def _init_vocab(special_tokens: list[str]) -> dict[int, bytes]:
