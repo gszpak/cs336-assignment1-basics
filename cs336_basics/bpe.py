@@ -1,15 +1,15 @@
 from collections import Counter, defaultdict
 from itertools import pairwise
+import json
 import logging
 from multiprocessing import Pool
 import os
-from typing import Iterable
+from typing import Iterable, Iterator
 
 import regex as re
 from sortedcontainers import SortedDict, SortedSet
 
 
-EOS = "<|endoftext|>"
 PRE_TOKENIZATION_REGEX = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 logger = logging.getLogger(__name__)
@@ -185,12 +185,14 @@ def _pre_tokenize(text: str, special_tokens: list[str]) -> Iterable[tuple[bytes,
         for pre_token_match in re.finditer(PRE_TOKENIZATION_REGEX, text):
             pre_token = pre_token_match.group()
             yield tuple(bytes([ch]) for ch in pre_token.encode())
+        return
     escaped_specials = sorted((re.escape(t) for t in special_tokens), key=len, reverse=True)
     split_pattern = "|".join(escaped_specials)
     documents = re.split(split_pattern, text)
     for doc in documents:
         if doc in special_tokens:
             yield tuple(bytes([ch]) for ch in doc.encode())
+            continue
         for pre_token_match in re.finditer(PRE_TOKENIZATION_REGEX, doc):
             pre_token = pre_token_match.group()
             yield tuple(bytes([ch]) for ch in pre_token.encode())
@@ -203,3 +205,60 @@ def _init_vocab(special_tokens: list[str]) -> dict[int, bytes]:
     for special_token in special_tokens:
         vocab[len(vocab)] = special_token.encode("utf-8")
     return vocab
+
+
+class Tokenizer:
+    def __init__(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens=None):
+        self.vocab = vocab
+        self.tok_2_id = {tok: id for id, tok in vocab.items()}
+        self.merges = merges
+        self.pair_to_rank = {pair: rank for rank, pair in enumerate(merges)}
+        self.special_tokens = special_tokens
+
+    @classmethod
+    def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
+        with open(vocab_filepath) as f:
+            vocab = json.load(f)
+        merges = []
+        with open(merges_filepath) as f:
+            for line in f:
+                tok1, tok2 = line.rstrip().split()
+                merges.append((tok1.encode(), tok2.encode()))
+        return Tokenizer(vocab, merges, special_tokens=special_tokens)
+
+    def encode(self, text: str) -> list[int]:
+        token_ids = []
+        pre_tokens = _pre_tokenize(text, self.special_tokens or [])
+        for pre_token in pre_tokens:
+            current_pre_token = pre_token
+            while len(current_pre_token) > 1:
+                min_rank = None
+                for tok1, tok2 in pairwise(current_pre_token):
+                    rank = self.pair_to_rank.get((tok1, tok2))
+                    if rank is None:
+                        continue
+                    if min_rank is None:
+                        min_rank = rank
+                    else:
+                        min_rank = min(rank, min_rank)
+                if min_rank is None:
+                    break
+                i = 0
+                next_pre_token = []
+                while i < len(current_pre_token):
+                    if i + 1 < len(current_pre_token) and self.pair_to_rank.get((current_pre_token[i], current_pre_token[i + 1])) == min_rank:
+                        next_pre_token.append(current_pre_token[i] + current_pre_token[i + 1])
+                        i += 2
+                    else:
+                        next_pre_token.append(current_pre_token[i])
+                        i += 1
+                current_pre_token = next_pre_token
+            token_ids.extend(self.tok_2_id[tok] for tok in current_pre_token)
+        return token_ids
+
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+        for s in iterable:
+            yield from self.encode(s)
+
+    def decode(self, ids: list[int]) -> str:
+        return b''.join([self.vocab[id_] for id_ in ids]).decode(errors="replace")
