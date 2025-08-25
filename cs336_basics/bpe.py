@@ -180,7 +180,7 @@ def train_bpe(
     return vocab, merges
 
 
-def _pre_tokenize(text: str, special_tokens: list[str]) -> Iterable[tuple[bytes, ...]]:
+def _pre_tokenize(text: str, special_tokens: list[str], include_special=False) -> Iterable[tuple[bytes, ...]]:
     if len(special_tokens) == 0:
         for pre_token_match in re.finditer(PRE_TOKENIZATION_REGEX, text):
             pre_token = pre_token_match.group()
@@ -188,10 +188,12 @@ def _pre_tokenize(text: str, special_tokens: list[str]) -> Iterable[tuple[bytes,
         return
     escaped_specials = sorted((re.escape(t) for t in special_tokens), key=len, reverse=True)
     split_pattern = "|".join(escaped_specials)
+    if include_special:
+        split_pattern = f"({split_pattern})"
     documents = re.split(split_pattern, text)
     for doc in documents:
         if doc in special_tokens:
-            yield tuple(bytes([ch]) for ch in doc.encode())
+            yield doc.encode(),
             continue
         for pre_token_match in re.finditer(PRE_TOKENIZATION_REGEX, doc):
             pre_token = pre_token_match.group()
@@ -228,7 +230,7 @@ class Tokenizer:
 
     def encode(self, text: str) -> list[int]:
         token_ids = []
-        pre_tokens = _pre_tokenize(text, self.special_tokens or [])
+        pre_tokens = _pre_tokenize(text, self.special_tokens or [], include_special=True)
         for pre_token in pre_tokens:
             current_pre_token = pre_token
             while len(current_pre_token) > 1:
