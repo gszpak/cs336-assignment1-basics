@@ -1,3 +1,4 @@
+import math
 import einops
 import numpy
 import torch
@@ -6,9 +7,7 @@ from jaxtyping import Float
 class Linear(torch.nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
         super().__init__()
-        weights = torch.zeros((out_features, in_features), device=device, dtype=dtype)
-        std = numpy.sqrt(2 / (in_features + out_features))
-        torch.nn.init.trunc_normal_(weights, mean=0.0, std=std, a=(-3 * std), b=(3 * std))
+        weights = _init_linear(out_features, in_features, device=device, dtype=dtype)
         self.weights = torch.nn.Parameter(data=weights)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -47,3 +46,32 @@ class RMSNorm(torch.nn.Module):
         )
         result = (x * self.gains) / einops.rearrange(rms, '... -> ... 1')
         return result.to(in_dtype)
+
+
+class SwigluFFN(torch.nn.Module):
+    def __init__(self, d_model: int, d_ff=None, device=None, dtype=None):
+        super().__init__()
+        d_ff = d_ff or math.floor(8 * d_model / 3)
+        if d_ff % 64 != 0:
+            raise ValueError("Internal dimension of the FFN should be a multiple of 64")
+        self.w1 = _init_linear(d_ff, d_model, device=device, dtype=dtype)
+        self.w2 = _init_linear(d_model, d_ff, device=device, dtype=dtype)
+        self.w3 = _init_linear(d_ff, d_model, device=device, dtype=dtype)
+
+    def forward(
+            self,
+            x: Float[torch.Tensor, "... d_model"]
+        ) -> Float[torch.Tensor, "... d_model"]:
+        w1_x = einops.einsum(x, self.w1, "... d_model, d_ff d_model -> ... d_ff")
+        w3_x = einops.einsum(x, self.w3, "... d_model, d_ff d_model -> ... d_ff")
+        return einops.einsum(
+            self.w2, (w1_x * torch.sigmoid(w1_x)) * w3_x,
+            "d_model d_ff, ... d_ff -> ... d_model"
+        )
+
+
+def _init_linear(d1: int, d2: int, device=None, dtype=None) -> torch.nn.Parameter:
+    weights = torch.zeros((d1, d2), device=device, dtype=dtype)
+    std = numpy.sqrt(2 / (d1 + d2))
+    torch.nn.init.trunc_normal_(weights, mean=0.0, std=std, a=(-3 * std), b=(3 * std))
+    return torch.nn.Parameter(data=weights)
