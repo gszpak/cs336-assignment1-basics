@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import IO, Any, BinaryIO
 from collections.abc import Iterable
+import einops
 from jaxtyping import Float, Int
 
 import numpy.typing as npt
@@ -10,6 +11,7 @@ import torch
 from torch import Tensor
 
 from cs336_basics.bpe import train_bpe
+from cs336_basics.transformer import Linear
 
 
 
@@ -31,8 +33,9 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-
-    raise NotImplementedError
+    linear = Linear(d_in, d_out)
+    linear._weights = weights
+    return linear.forward(in_features)
 
 
 def run_embedding(
