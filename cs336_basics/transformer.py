@@ -2,7 +2,7 @@ import math
 import einops
 import numpy
 import torch
-from jaxtyping import Float
+from jaxtyping import Float, Int
 
 class Linear(torch.nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
@@ -68,6 +68,37 @@ class SwigluFFN(torch.nn.Module):
             self.w2, (w1_x * torch.sigmoid(w1_x)) * w3_x,
             "d_model d_ff, ... d_ff -> ... d_model"
         )
+
+
+class RotaryPositionalEmbedding(torch.nn.Module):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+        super().__init__()
+        sequence_positions = torch.arange(max_seq_len, device=device)
+        emb_positions = 1.0 / (
+            theta ** (torch.arange(0, d_k, 2, device=device).float() / d_k)
+        )
+        angles = einops.einsum(sequence_positions, emb_positions, "i, j -> i j")
+        cos = torch.cos(angles)
+        sin = torch.sin(angles)
+        rotations = einops.rearrange(
+            torch.stack([cos, -sin, sin, cos], dim=-1),
+            "... (r c) -> ... r c", r=2, c=2
+        )
+        self.register_buffer("rotations", rotations, persistent=False)
+
+    def forward(
+            self,
+            x: Float[torch.Tensor, "... seq_len d_k"],
+            token_positions: Int[torch.Tensor, "... seq_len"]
+        ) -> Float[torch.Tensor, "... seq_len d_k"]:
+        seq_len = token_positions.shape[-1]
+        rotations = self.get_buffer("rotations")[:seq_len]
+        seq_rotations = rotations[token_positions]
+        pairwise_grouped = einops.rearrange(x, "... seq_len (d two) -> ... seq_len d two", two=2)
+        rotated = einops.einsum(
+            pairwise_grouped, seq_rotations,
+            "... seq_len d two, seq_len d two1 two -> ... seq_len d two1")
+        return einops.rearrange(rotated, "... seq_len d two -> ... seq_len (d two)")
 
 
 def _init_linear(d1: int, d2: int, device=None, dtype=None) -> torch.nn.Parameter:
