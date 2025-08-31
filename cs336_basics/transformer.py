@@ -4,6 +4,7 @@ import numpy
 import torch
 from jaxtyping import Float, Int
 
+
 class Linear(torch.nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
         super().__init__()
@@ -101,8 +102,48 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         return einops.rearrange(rotated, "... seq_len d two -> ... seq_len (d two)")
 
 
+def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
+    def softmax(x: torch.Tensor):
+        normalized = x - x.amax(dim=-1, keepdim=True)
+        exp = torch.exp(normalized)
+        sum = torch.sum(exp, dim=-1, keepdim=True)
+        print((exp / sum).shape)
+        return exp / sum
+    if len(x.shape) > 1:
+        return _apply_along_dim(x, dim, softmax)
+    return softmax(x)
+
+
+def scaled_dot_product_attention(
+    Q: Float[torch.Tensor, " ... queries d_k"],
+    K: Float[torch.Tensor, " ... keys d_k"],
+    V: Float[torch.Tensor, " ... keys d_v"],
+    mask: Float[torch.Tensor, " ... queries keys"] | None = None
+) -> Float[torch.Tensor, " ... queries d_v"]:
+    d_k = Q.shape[-1]
+    query_key_attention = einops.einsum(
+        Q, K,
+        "... queries d_k, ... keys d_k -> ... queries keys"
+    ) / torch.sqrt(torch.tensor(d_k))
+    if mask is not None:
+        query_key_attention[~mask] = -torch.inf
+    query_key_attention = softmax(query_key_attention, dim=-1)
+    return einops.einsum(
+        query_key_attention, V,
+        "... queries keys, ... keys d_v -> ... queries d_v"
+    )
+
+
 def _init_linear(d1: int, d2: int, device=None, dtype=None) -> torch.nn.Parameter:
     weights = torch.zeros((d1, d2), device=device, dtype=dtype)
     std = numpy.sqrt(2 / (d1 + d2))
     torch.nn.init.trunc_normal_(weights, mean=0.0, std=std, a=(-3 * std), b=(3 * std))
     return torch.nn.Parameter(data=weights)
+
+
+def _apply_along_dim(x: torch.Tensor, dim: int, fn) -> torch.Tensor:
+    x_last = x.movedim(dim, -1)
+    y, ps = einops.pack([x_last], pattern='* d')
+    y2 = fn(y)
+    out, = einops.unpack(y2, ps, pattern='* d2')
+    return out.movedim(-1, dim)
