@@ -11,7 +11,7 @@ import torch
 from torch import Tensor
 
 from cs336_basics.bpe import Tokenizer, train_bpe
-from cs336_basics.transformer import Embedding, Linear, RMSNorm, RotaryPositionalEmbedding, SwigluFFN, scaled_dot_product_attention, softmax
+from cs336_basics.transformer import CausalMultiHeadAttention, Embedding, Linear, RMSNorm, RotaryPositionalEmbedding, SwigluFFN, scaled_dot_product_attention, softmax
 
 
 
@@ -149,7 +149,12 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    mha = CausalMultiHeadAttention(d_model, num_heads)
+    mha.w_q = torch.nn.Parameter(data=q_proj_weight)
+    mha.w_k = torch.nn.Parameter(data=k_proj_weight)
+    mha.w_v = torch.nn.Parameter(data=v_proj_weight)
+    mha.w_o = torch.nn.Parameter(data=o_proj_weight)
+    return mha.forward(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -189,7 +194,14 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    d_k = d_model // num_heads
+    rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+    mha = CausalMultiHeadAttention(d_model, num_heads, rope=rope)
+    mha.w_q = torch.nn.Parameter(data=q_proj_weight)
+    mha.w_k = torch.nn.Parameter(data=k_proj_weight)
+    mha.w_v = torch.nn.Parameter(data=v_proj_weight)
+    mha.w_o = torch.nn.Parameter(data=o_proj_weight)
+    return mha.forward(in_features, token_positions=token_positions)
 
 
 def run_rope(

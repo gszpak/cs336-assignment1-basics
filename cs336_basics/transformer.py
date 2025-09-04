@@ -2,7 +2,7 @@ import math
 import einops
 import numpy
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, Bool
 
 
 class Linear(torch.nn.Module):
@@ -37,7 +37,7 @@ class RMSNorm(torch.nn.Module):
     def forward(
             self,
             x: Float[torch.Tensor, "batch_size sequence_length d_model"]
-        ) -> Float[torch.Tensor, "batch_size sequence_length d_model"]:
+    ) -> Float[torch.Tensor, "batch_size sequence_length d_model"]:
         in_dtype = x.dtype
         x = x.to(torch.float32)
         rms = torch.sqrt(
@@ -62,7 +62,7 @@ class SwigluFFN(torch.nn.Module):
     def forward(
             self,
             x: Float[torch.Tensor, "... d_model"]
-        ) -> Float[torch.Tensor, "... d_model"]:
+    ) -> Float[torch.Tensor, "... d_model"]:
         w1_x = einops.einsum(x, self.w1, "... d_model, d_ff d_model -> ... d_ff")
         w3_x = einops.einsum(x, self.w3, "... d_model, d_ff d_model -> ... d_ff")
         return einops.einsum(
@@ -91,15 +91,63 @@ class RotaryPositionalEmbedding(torch.nn.Module):
             self,
             x: Float[torch.Tensor, "... seq_len d_k"],
             token_positions: Int[torch.Tensor, "... seq_len"]
-        ) -> Float[torch.Tensor, "... seq_len d_k"]:
+    ) -> Float[torch.Tensor, "... seq_len d_k"]:
         seq_len = token_positions.shape[-1]
         rotations = self.get_buffer("rotations")[:seq_len]
         seq_rotations = rotations[token_positions]
         pairwise_grouped = einops.rearrange(x, "... seq_len (d two) -> ... seq_len d two", two=2)
         rotated = einops.einsum(
             pairwise_grouped, seq_rotations,
-            "... seq_len d two, seq_len d two1 two -> ... seq_len d two1")
+            "... seq_len d two, ... seq_len d two1 two -> ... seq_len d two1")
         return einops.rearrange(rotated, "... seq_len d two -> ... seq_len (d two)")
+
+
+class CausalMultiHeadAttention(torch.nn.Module):
+    def __init__(self, d_model: int, num_heads: int, rope=None, device=None, dtype=None):
+        super().__init__()
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+        self.d_v = d_model // num_heads
+        self.w_q = _init_linear(d_model, d_model, device=device, dtype=dtype)
+        self.w_k = _init_linear(d_model, d_model, device=device, dtype=dtype)
+        self.w_v = _init_linear(d_model, d_model, device=device, dtype=dtype)
+        self.w_o = _init_linear(d_model, d_model, device=device, dtype=dtype)
+        self.rope = rope
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, "... seq_len d_model"],
+        token_positions: Int[torch.Tensor, "... seq_len"] | None = None
+    ) -> Float[torch.Tensor, " ... seq_len d_out"]:
+        *leading_dims, seq_len, _ = x.shape
+        wq_x = einops.einsum(self.w_q, x, "d_k d_model, ... seq_len d_model -> ... seq_len d_k")
+        wk_x = einops.einsum(self.w_k, x, "d_k d_model, ... seq_len d_model -> ... seq_len d_k")
+        wv_x = einops.einsum(self.w_v, x, "d_v d_model, ... seq_len d_model -> ... seq_len d_v")
+        mask = self._build_attention_mask(leading_dims, seq_len)
+        head_attention_matrices = []
+        for h in range(self.num_heads):
+            q_head = wq_x[..., (h * self.d_k):((h + 1) * self.d_k)]
+            k_head = wk_x[..., (h * self.d_k):((h + 1) * self.d_k)]
+            if self.rope is not None and token_positions is not None:
+                q_head = self.rope(q_head, token_positions)
+                k_head = self.rope(k_head, token_positions)
+            v_head = wv_x[..., (h * self.d_v):((h + 1) * self.d_v)]
+            head_attention = scaled_dot_product_attention(q_head, k_head, v_head, mask=mask)
+            head_attention_matrices.append(head_attention)
+        attention_matrices_stacked = torch.cat(head_attention_matrices, dim=-1)
+        return einops.einsum(
+            self.w_o,
+            attention_matrices_stacked,
+            "d_model hd_v, ... seq_len hd_v -> ... seq_len d_model"
+        )
+
+    @classmethod
+    def _build_attention_mask(cls, leading_dims: list[int], seq_len: int) -> Bool[torch.Tensor, " ... seq_len seq_len"]:
+        mask = torch.tril(torch.ones((seq_len, seq_len), dtype=torch.bool))
+        if leading_dims:
+            mask = mask.view(*([1] * len(leading_dims)), seq_len, seq_len)
+            mask = mask.expand(*leading_dims, seq_len, seq_len)
+        return mask
 
 
 def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
@@ -107,7 +155,6 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
         normalized = x - x.amax(dim=-1, keepdim=True)
         exp = torch.exp(normalized)
         sum = torch.sum(exp, dim=-1, keepdim=True)
-        print((exp / sum).shape)
         return exp / sum
     if len(x.shape) > 1:
         return _apply_along_dim(x, dim, softmax)
