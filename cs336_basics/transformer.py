@@ -119,25 +119,30 @@ class CausalMultiHeadAttention(torch.nn.Module):
         x: Float[torch.Tensor, "... seq_len d_model"],
         token_positions: Int[torch.Tensor, "... seq_len"] | None = None
     ) -> Float[torch.Tensor, " ... seq_len d_out"]:
-        *leading_dims, seq_len, _ = x.shape
-        wq_x = einops.einsum(self.w_q, x, "d_k d_model, ... seq_len d_model -> ... seq_len d_k")
-        wk_x = einops.einsum(self.w_k, x, "d_k d_model, ... seq_len d_model -> ... seq_len d_k")
-        wv_x = einops.einsum(self.w_v, x, "d_v d_model, ... seq_len d_model -> ... seq_len d_v")
+        wq_x = einops.einsum(self.w_q, x, "hd_k d_model, ... seq_len d_model -> ... seq_len hd_k")
+        wk_x = einops.einsum(self.w_k, x, "hd_k d_model, ... seq_len d_model -> ... seq_len hd_k")
+        wv_x = einops.einsum(self.w_v, x, "hd_v d_model, ... seq_len d_model -> ... seq_len hd_v")
+        wq_x = einops.rearrange(
+            wq_x, "... seq_len (h d_k) -> ... h seq_len d_k",
+            h=self.num_heads
+        )
+        wk_x = einops.rearrange(
+            wk_x, "... seq_len (h d_k) -> ... h seq_len d_k",
+            h=self.num_heads
+        )
+        wv_x = einops.rearrange(
+            wv_x, "... seq_len (h d_v) -> ... h seq_len d_v",
+            h=self.num_heads
+        )
+        *leading_dims, seq_len, _ = wq_x.shape
         mask = self._build_attention_mask(leading_dims, seq_len)
-        head_attention_matrices = []
-        for h in range(self.num_heads):
-            q_head = wq_x[..., (h * self.d_k):((h + 1) * self.d_k)]
-            k_head = wk_x[..., (h * self.d_k):((h + 1) * self.d_k)]
-            if self.rope is not None and token_positions is not None:
-                q_head = self.rope(q_head, token_positions)
-                k_head = self.rope(k_head, token_positions)
-            v_head = wv_x[..., (h * self.d_v):((h + 1) * self.d_v)]
-            head_attention = scaled_dot_product_attention(q_head, k_head, v_head, mask=mask)
-            head_attention_matrices.append(head_attention)
-        attention_matrices_stacked = torch.cat(head_attention_matrices, dim=-1)
+        if self.rope is not None and token_positions is not None:
+            wq_x = self.rope(wq_x, token_positions)
+            wk_x = self.rope(wk_x, token_positions)
+        mha = scaled_dot_product_attention(wq_x, wk_x, wv_x, mask=mask)
+        mha = einops.rearrange(mha, "... h seq_len d_v -> ... seq_len (h d_v)")
         return einops.einsum(
-            self.w_o,
-            attention_matrices_stacked,
+            self.w_o, mha,
             "d_model hd_v, ... seq_len hd_v -> ... seq_len d_model"
         )
 
