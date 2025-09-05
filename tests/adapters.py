@@ -34,7 +34,7 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
     linear = Linear(d_in, d_out)
-    linear.weights = torch.nn.Parameter(data=weights)
+    linear.weight.data = weights
     return linear.forward(in_features)
 
 
@@ -91,9 +91,9 @@ def run_swiglu(
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
     swiglu = SwigluFFN(d_model, d_ff)
-    swiglu.w1.data = w1_weight
-    swiglu.w2.data = w2_weight
-    swiglu.w3.data = w3_weight
+    swiglu.w1.weight.data = w1_weight
+    swiglu.w2.weight.data = w2_weight
+    swiglu.w3.weight.data = w3_weight
     return swiglu.forward(in_features)
 
 
@@ -150,10 +150,10 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
     mha = CausalMultiHeadAttention(d_model, num_heads)
-    mha.w_q = torch.nn.Parameter(data=q_proj_weight)
-    mha.w_k = torch.nn.Parameter(data=k_proj_weight)
-    mha.w_v = torch.nn.Parameter(data=v_proj_weight)
-    mha.w_o = torch.nn.Parameter(data=o_proj_weight)
+    mha.w_q.weight.data = q_proj_weight
+    mha.w_k.weight.data = k_proj_weight
+    mha.w_v.weight.data = v_proj_weight
+    mha.w_o.weight.data = o_proj_weight
     return mha.forward(in_features)
 
 
@@ -197,10 +197,10 @@ def run_multihead_self_attention_with_rope(
     d_k = d_model // num_heads
     rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
     mha = CausalMultiHeadAttention(d_model, num_heads, rope=rope)
-    mha.w_q = torch.nn.Parameter(data=q_proj_weight)
-    mha.w_k = torch.nn.Parameter(data=k_proj_weight)
-    mha.w_v = torch.nn.Parameter(data=v_proj_weight)
-    mha.w_o = torch.nn.Parameter(data=o_proj_weight)
+    mha.w_q.weight.data = q_proj_weight
+    mha.w_k.weight.data = k_proj_weight
+    mha.w_v.weight.data = v_proj_weight
+    mha.w_o.weight.data = o_proj_weight
     return mha.forward(in_features, token_positions=token_positions)
 
 

@@ -8,11 +8,13 @@ from jaxtyping import Float, Int, Bool
 class Linear(torch.nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
         super().__init__()
-        weights = _init_linear(out_features, in_features, device=device, dtype=dtype)
-        self.weights = torch.nn.Parameter(data=weights)
+        weights = torch.zeros((out_features, in_features), device=device, dtype=dtype)
+        std = numpy.sqrt(2 / (in_features + out_features))
+        torch.nn.init.trunc_normal_(weights, mean=0.0, std=std, a=(-3 * std), b=(3 * std))
+        self.weight = torch.nn.Parameter(data=weights)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return einops.einsum(x, self.weights, "... d_in, d_out d_in -> ... d_out")
+        return einops.einsum(x, self.weight, "... d_in, d_out d_in -> ... d_out")
 
 
 class Embedding(torch.nn.Module):
@@ -55,16 +57,17 @@ class SwigluFFN(torch.nn.Module):
         d_ff = d_ff or math.floor(8 * d_model / 3)
         if d_ff % 64 != 0:
             raise ValueError("Internal dimension of the FFN should be a multiple of 64")
-        self.w1 = _init_linear(d_ff, d_model, device=device, dtype=dtype)
-        self.w2 = _init_linear(d_model, d_ff, device=device, dtype=dtype)
-        self.w3 = _init_linear(d_ff, d_model, device=device, dtype=dtype)
+        self.w1 = Linear(d_model, d_ff, device=device, dtype=dtype)
+        self.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
+        self.w3 = Linear(d_model, d_ff, device=device, dtype=dtype)
 
     def forward(
             self,
             x: Float[torch.Tensor, "... d_model"]
     ) -> Float[torch.Tensor, "... d_model"]:
-        w1_x = einops.einsum(x, self.w1, "... d_model, d_ff d_model -> ... d_ff")
-        w3_x = einops.einsum(x, self.w3, "... d_model, d_ff d_model -> ... d_ff")
+        w1_x = self.w1(x)
+        w3_x = self.w3(x)
+        return self.w2((w1_x * torch.sigmoid(w1_x)) * w3_x)
         return einops.einsum(
             self.w2, (w1_x * torch.sigmoid(w1_x)) * w3_x,
             "d_model d_ff, ... d_ff -> ... d_model"
@@ -108,10 +111,10 @@ class CausalMultiHeadAttention(torch.nn.Module):
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
         self.d_v = d_model // num_heads
-        self.w_q = _init_linear(d_model, d_model, device=device, dtype=dtype)
-        self.w_k = _init_linear(d_model, d_model, device=device, dtype=dtype)
-        self.w_v = _init_linear(d_model, d_model, device=device, dtype=dtype)
-        self.w_o = _init_linear(d_model, d_model, device=device, dtype=dtype)
+        self.w_q = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.w_k = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.w_v = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.w_o = Linear(d_model, d_model, device=device, dtype=dtype)
         self.rope = rope
 
     def forward(
@@ -119,9 +122,9 @@ class CausalMultiHeadAttention(torch.nn.Module):
         x: Float[torch.Tensor, "... seq_len d_model"],
         token_positions: Int[torch.Tensor, "... seq_len"] | None = None
     ) -> Float[torch.Tensor, " ... seq_len d_out"]:
-        wq_x = einops.einsum(self.w_q, x, "hd_k d_model, ... seq_len d_model -> ... seq_len hd_k")
-        wk_x = einops.einsum(self.w_k, x, "hd_k d_model, ... seq_len d_model -> ... seq_len hd_k")
-        wv_x = einops.einsum(self.w_v, x, "hd_v d_model, ... seq_len d_model -> ... seq_len hd_v")
+        wq_x = self.w_q(x)
+        wk_x = self.w_k(x)
+        wv_x = self.w_v(x)
         wq_x = einops.rearrange(
             wq_x, "... seq_len (h d_k) -> ... h seq_len d_k",
             h=self.num_heads
@@ -141,10 +144,7 @@ class CausalMultiHeadAttention(torch.nn.Module):
             wk_x = self.rope(wk_x, token_positions)
         mha = scaled_dot_product_attention(wq_x, wk_x, wv_x, mask=mask)
         mha = einops.rearrange(mha, "... h seq_len d_v -> ... seq_len (h d_v)")
-        return einops.einsum(
-            self.w_o, mha,
-            "d_model hd_v, ... seq_len hd_v -> ... seq_len d_model"
-        )
+        return self.w_o(mha)
 
     @classmethod
     def _build_attention_mask(cls, leading_dims: list[int], seq_len: int) -> Bool[torch.Tensor, " ... seq_len seq_len"]:
@@ -184,13 +184,6 @@ def scaled_dot_product_attention(
         query_key_attention, V,
         "... queries keys, ... keys d_v -> ... queries d_v"
     )
-
-
-def _init_linear(d1: int, d2: int, device=None, dtype=None) -> torch.nn.Parameter:
-    weights = torch.zeros((d1, d2), device=device, dtype=dtype)
-    std = numpy.sqrt(2 / (d1 + d2))
-    torch.nn.init.trunc_normal_(weights, mean=0.0, std=std, a=(-3 * std), b=(3 * std))
-    return torch.nn.Parameter(data=weights)
 
 
 def _apply_along_dim(x: torch.Tensor, dim: int, fn) -> torch.Tensor:
