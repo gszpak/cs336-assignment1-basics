@@ -68,10 +68,6 @@ class SwigluFFN(torch.nn.Module):
         w1_x = self.w1(x)
         w3_x = self.w3(x)
         return self.w2((w1_x * torch.sigmoid(w1_x)) * w3_x)
-        return einops.einsum(
-            self.w2, (w1_x * torch.sigmoid(w1_x)) * w3_x,
-            "d_model d_ff, ... d_ff -> ... d_model"
-        )
 
 
 class RotaryPositionalEmbedding(torch.nn.Module):
