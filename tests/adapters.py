@@ -11,7 +11,7 @@ import torch
 from torch import Tensor
 
 from cs336_basics.bpe import Tokenizer, train_bpe
-from cs336_basics.transformer import CausalMultiHeadAttention, Embedding, Linear, RMSNorm, RotaryPositionalEmbedding, SwigluFFN, scaled_dot_product_attention, softmax
+from cs336_basics.transformer import CausalMultiHeadAttention, Embedding, Linear, RMSNorm, RotaryPositionalEmbedding, SwigluFFN, TransformerBlock, scaled_dot_product_attention, softmax
 
 
 
@@ -34,7 +34,7 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
     linear = Linear(d_in, d_out)
-    linear.weight.data = weights
+    linear.load_state_dict({"weight": weights})
     return linear.forward(in_features)
 
 
@@ -57,7 +57,7 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
     embedding = Embedding(vocab_size, d_model)
-    embedding.embeddings = torch.nn.Parameter(data=weights)
+    embedding.embeddings.data = weights
     return embedding.forward(token_ids)
 
 
@@ -91,9 +91,11 @@ def run_swiglu(
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
     swiglu = SwigluFFN(d_model, d_ff)
-    swiglu.w1.weight.data = w1_weight
-    swiglu.w2.weight.data = w2_weight
-    swiglu.w3.weight.data = w3_weight
+    swiglu.load_state_dict({
+        'w1.weight': w1_weight,
+        'w2.weight': w2_weight,
+        'w3.weight': w3_weight
+    })
     return swiglu.forward(in_features)
 
 
@@ -150,10 +152,12 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
     mha = CausalMultiHeadAttention(d_model, num_heads)
-    mha.w_q.weight.data = q_proj_weight
-    mha.w_k.weight.data = k_proj_weight
-    mha.w_v.weight.data = v_proj_weight
-    mha.w_o.weight.data = o_proj_weight
+    mha.load_state_dict({
+        "q_proj.weight": q_proj_weight,
+        "k_proj.weight": k_proj_weight,
+        "v_proj.weight": v_proj_weight,
+        "output_proj.weight": o_proj_weight,
+    })
     return mha.forward(in_features)
 
 
@@ -197,10 +201,12 @@ def run_multihead_self_attention_with_rope(
     d_k = d_model // num_heads
     rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
     mha = CausalMultiHeadAttention(d_model, num_heads, rope=rope)
-    mha.w_q.weight.data = q_proj_weight
-    mha.w_k.weight.data = k_proj_weight
-    mha.w_v.weight.data = v_proj_weight
-    mha.w_o.weight.data = o_proj_weight
+    mha.load_state_dict({
+        "q_proj.weight": q_proj_weight,
+        "k_proj.weight": k_proj_weight,
+        "v_proj.weight": v_proj_weight,
+        "output_proj.weight": o_proj_weight,
+    })
     return mha.forward(in_features, token_positions=token_positions)
 
 
@@ -297,7 +303,21 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    d_k = d_model // num_heads
+    rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+    transformer_block = TransformerBlock(
+        d_model, num_heads, d_ff, rope=rope)
+    transformer_block.load_state_dict(weights)
+    # transformer_block.ln1.weight.data = weights["ln1.weight"]
+    # transformer_block.ln2.weight.data = weights["ln2.weight"]
+    # transformer_block.ffn.w1.weight.data = weights["ffn.w1.weight"]
+    # transformer_block.ffn.w2.weight.data = weights["ffn.w2.weight"]
+    # transformer_block.ffn.w3.weight.data = weights["ffn.w3.weight"]
+    # transformer_block.attn.q_proj.weight.data = weights["attn.q_proj.weight"]
+    # transformer_block.attn.k_proj.weight.data = weights["attn.k_proj.weight"]
+    # transformer_block.attn.v_proj.weight.data = weights["attn.v_proj.weight"]
+    # transformer_block.attn.output_proj.weight.data = weights["attn.output_proj.weight"]
+    return transformer_block(in_features)
 
 
 def run_transformer_lm(
@@ -403,7 +423,7 @@ def run_rmsnorm(
         RMSNorm of the `in_features`.
     """
     rms_norm = RMSNorm(d_model, eps)
-    rms_norm.gains = torch.nn.Parameter(data=weights)
+    rms_norm.weight = torch.nn.Parameter(data=weights)
     return rms_norm.forward(in_features)
 
 
