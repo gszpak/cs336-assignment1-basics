@@ -306,15 +306,6 @@ def run_transformer_block(
     transformer_block = TransformerBlock(
         d_model, num_heads, d_ff, rope=rope)
     transformer_block.load_state_dict(weights)
-    # transformer_block.ln1.weight.data = weights["ln1.weight"]
-    # transformer_block.ln2.weight.data = weights["ln2.weight"]
-    # transformer_block.ffn.w1.weight.data = weights["ffn.w1.weight"]
-    # transformer_block.ffn.w2.weight.data = weights["ffn.w2.weight"]
-    # transformer_block.ffn.w3.weight.data = weights["ffn.w3.weight"]
-    # transformer_block.attn.q_proj.weight.data = weights["attn.q_proj.weight"]
-    # transformer_block.attn.k_proj.weight.data = weights["attn.k_proj.weight"]
-    # transformer_block.attn.v_proj.weight.data = weights["attn.v_proj.weight"]
-    # transformer_block.attn.output_proj.weight.data = weights["attn.output_proj.weight"]
     return transformer_block(in_features)
 
 
