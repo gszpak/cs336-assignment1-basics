@@ -49,8 +49,10 @@ class RMSNorm(torch.nn.Module):
         in_dtype = x.dtype
         x = x.to(torch.float32)
         rms = torch.sqrt(
-            (einops.reduce(x ** 2, "... d_model -> ...", "sum") + self.eps) /
-            self.d_model
+            (
+                einops.reduce(x ** 2, "... d_model -> ...", "sum") /
+                self.d_model
+            ) + self.eps
         )
         result = (x * self.weight) / einops.rearrange(rms, '... -> ... 1')
         return result.to(in_dtype)
@@ -168,9 +170,6 @@ class TransformerBlock(torch.nn.Module):
     ) -> Float[torch.Tensor, " ... seq_len d_model"]:
         _, seq_len, _ = x.shape
         token_positions = torch.arange(seq_len, device=x.device)
-        token_positions = einops.repeat(
-            token_positions, "sequence_length -> batch sequence_length", batch=x.shape[0]
-        )
         y = self.attn(
             self.ln1(x), token_positions=token_positions
         ) + x
