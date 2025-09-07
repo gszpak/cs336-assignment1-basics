@@ -10,7 +10,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from cs336_basics.bpe import Tokenizer, train_bpe
-from cs336_basics.transformer import CausalMultiHeadAttention, Embedding, Linear, RMSNorm, RotaryPositionalEmbedding, SwigluFFN, TransformerBlock, scaled_dot_product_attention, softmax
+from cs336_basics.transformer import CausalMultiHeadAttention, Embedding, Linear, RMSNorm, RotaryPositionalEmbedding, SwigluFFN, Transformer, TransformerBlock, scaled_dot_product_attention, softmax
 
 
 def run_linear(
@@ -55,7 +55,7 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
     embedding = Embedding(vocab_size, d_model)
-    embedding.embeddings.data = weights
+    embedding.weight.data = weights
     return embedding.forward(token_ids)
 
 
@@ -388,7 +388,10 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    transformer = Transformer(
+        vocab_size, context_length, num_layers, d_model, num_heads, d_ff, rope_theta)
+    transformer.load_state_dict(weights)
+    return transformer(in_indices)
 
 
 def run_rmsnorm(

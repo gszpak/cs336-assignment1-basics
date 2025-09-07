@@ -22,10 +22,12 @@ class Embedding(torch.nn.Module):
         super().__init__()
         embeddings = torch.zeros((num_embeddings, embedding_dim), device=device, dtype=dtype)
         torch.nn.init.trunc_normal_(embeddings, mean=0.0, std=1, a=-3, b=3)
-        self.embeddings = torch.nn.Parameter(data=embeddings)
+        self.weight = torch.nn.Parameter(data=embeddings)
 
-    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
-        return self.embeddings[token_ids]
+    def forward(
+            self, token_ids: Int[torch.Tensor, " ..."]
+        ) -> Float[torch.Tensor, "... d_model"]:
+        return self.weight[token_ids]
 
 
 class RMSNorm(torch.nn.Module):
@@ -174,6 +176,40 @@ class TransformerBlock(torch.nn.Module):
             self.ln1(x), token_positions=token_positions
         ) + x
         return self.ffn(self.ln2(y)) + y
+
+
+class Transformer(torch.nn.Module):
+    def __init__(
+        self, vocab_size: int, context_length: int, num_layers: int,
+        d_model: int, num_heads: int, d_ff: int, rope_theta: float,
+        device=None, dtype=None
+    ):
+        super().__init__()
+        rope = RotaryPositionalEmbedding(
+            rope_theta, d_model // num_heads, context_length, device=device)
+        self.token_embeddings = Embedding(
+            vocab_size, d_model, device=device, dtype=dtype)
+        rope = RotaryPositionalEmbedding(
+            rope_theta, d_model // num_heads, context_length)
+        self.layers = torch.nn.ModuleList([
+            TransformerBlock(
+                d_model, num_heads, d_ff, rope,
+                device=device, dtype=dtype)
+            for _ in range(num_layers)
+        ])
+        self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
+        self.lm_head = Linear(
+            d_model, vocab_size, device=device, dtype=dtype)
+
+    def forward(
+        self,
+        in_indices: Int[torch.Tensor, "batch_size sequence_length"]
+    ) -> Float[torch.Tensor, "batch_size sequence_length vocab_size"]:
+        emb = self.token_embeddings(in_indices)
+        for layer in self.layers:
+            emb = layer(emb)
+        out_emb = self.ln_final(emb)
+        return self.lm_head(out_emb)
 
 
 def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
