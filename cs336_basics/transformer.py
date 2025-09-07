@@ -191,7 +191,7 @@ class Transformer(torch.nn.Module):
             vocab_size, d_model, device=device, dtype=dtype)
         rope = RotaryPositionalEmbedding(
             rope_theta, d_model // num_heads, context_length)
-        self.layers = torch.nn.ModuleList([
+        self.layers = torch.nn.Sequential(*[
             TransformerBlock(
                 d_model, num_heads, d_ff, rope,
                 device=device, dtype=dtype)
@@ -206,9 +206,7 @@ class Transformer(torch.nn.Module):
         in_indices: Int[torch.Tensor, "batch_size sequence_length"]
     ) -> Float[torch.Tensor, "batch_size sequence_length vocab_size"]:
         emb = self.token_embeddings(in_indices)
-        for layer in self.layers:
-            emb = layer(emb)
-        out_emb = self.ln_final(emb)
+        out_emb = self.ln_final(self.layers(emb))
         return self.lm_head(out_emb)
 
 
