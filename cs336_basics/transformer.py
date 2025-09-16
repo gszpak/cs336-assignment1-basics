@@ -185,8 +185,10 @@ class Transformer(torch.nn.Module):
         device=None, dtype=None
     ):
         super().__init__()
-        rope = RotaryPositionalEmbedding(
-            rope_theta, d_model // num_heads, context_length, device=device)
+        self.vocab_size = vocab_size
+        self.d_model = d_model
+        self.num_layers = num_layers
+        self.d_ff = d_ff
         self.token_embeddings = Embedding(
             vocab_size, d_model, device=device, dtype=dtype)
         rope = RotaryPositionalEmbedding(
@@ -208,6 +210,18 @@ class Transformer(torch.nn.Module):
         emb = self.token_embeddings(in_indices)
         out_emb = self.ln_final(self.layers(emb))
         return self.lm_head(out_emb)
+
+    @property
+    def num_params(self):
+        return (
+            2 * self.vocab_size * self.d_model +
+            self.num_layers * (
+                3 * self.d_model * self.d_ff +
+                4 * self.d_model * self.d_model +
+                2 * self.d_model
+            ) +
+            self.d_model
+        )
 
 
 def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
